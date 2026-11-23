@@ -191,3 +191,72 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+# Two concentric square subpaths in a single path: the inner square must be
+# hollow under the even-odd fill rule.
+NESTED_SQUARES_PATH = 'M10 10 H90 V90 H10 Z M30 30 H70 V70 H30 Z'
+
+
+def _png_alpha(png_bytes, x, y):
+    """Return the alpha component of a pixel in a PNG byte string."""
+    import struct
+    image = cairo.ImageSurface.create_from_png(io.BytesIO(png_bytes))
+    data = image.get_data()
+    offset = y * image.get_stride() + x * 4
+    # FORMAT_ARGB32 stores 0xAARRGGBB in native byte order
+    return (struct.unpack_from('I', data, offset)[0] >> 24) & 0xFF
+
+
+def _pdf_content(pdf_bytes):
+    """Return the decompressed content streams of a PDF byte string."""
+    import re
+    import zlib
+    contents = []
+    for match in re.finditer(
+            rb'stream\r?\n(.*?)endstream', pdf_bytes, re.DOTALL):
+        stream = match.group(1)
+        try:
+            stream = zlib.decompress(stream)
+        except zlib.error:
+            pass
+        contents.append(stream)
+    return b'\n'.join(contents)
+
+
+@pytest.mark.parametrize('fill_rule_attribute', [
+    'fill-rule="evenodd"',
+    'style="fill-rule:evenodd"',
+])
+def test_fill_rule_evenodd_nested_squares(fill_rule_attribute):
+    """The inner subpath of an even-odd path is left hollow."""
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"
+        viewBox="0 0 100 100">
+      <path d="{NESTED_SQUARES_PATH}" fill="black" {fill_rule_attribute}/>
+    </svg>'''.encode()
+    png = svg2png(bytestring=svg)
+
+    assert _png_alpha(png, 2, 2) == 0       # outside both squares
+    assert _png_alpha(png, 20, 50) == 255   # ring between the squares
+    assert _png_alpha(png, 50, 50) == 0     # inner square: hollow
+
+    # The PDF surface emits the even-odd fill operator (f*)
+    assert b'f*' in _pdf_content(svg2pdf(bytestring=svg))
+
+
+def test_fill_rule_nonzero_nested_squares():
+    """With the nonzero rule same-direction subpaths both get filled."""
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"
+        viewBox="0 0 100 100">
+      <path d="{NESTED_SQUARES_PATH}" fill="black" fill-rule="nonzero"/>
+    </svg>'''.encode()
+    png = svg2png(bytestring=svg)
+
+    assert _png_alpha(png, 2, 2) == 0       # outside both squares
+    assert _png_alpha(png, 20, 50) == 255   # ring between the squares
+    assert _png_alpha(png, 50, 50) == 255   # inner square: filled
+
+    # The PDF surface uses the plain nonzero winding fill operator (f)
+    content = _pdf_content(svg2pdf(bytestring=svg))
+    assert b'f*' not in content
+    assert b' f' in content or content.rstrip().endswith(b'f')
