@@ -3,6 +3,15 @@
 ======
 
 
+Unreleased
+==========
+
+* Fix ``rgba()`` colors with a percentage alpha value, which were rendered
+  fully opaque instead of with the requested transparency
+* Accept percentage values for the ``stop-opacity`` property of gradient
+  stops
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

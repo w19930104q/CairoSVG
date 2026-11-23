@@ -29,6 +29,16 @@ EXTEND_OPERATORS = {
 }
 
 
+def parse_opacity(value):
+    """Parse an SVG opacity value, given as a number or as a percentage."""
+    if value is None:
+        return 1
+    value = value.strip()
+    if value.endswith('%'):
+        return float(value[:-1]) / 100
+    return float(value)
+
+
 def update_def_href(surface, def_name, def_dict, chain=None):
     """Update the attributes of the def according to its href attribute."""
     def_node = def_dict[def_name]
@@ -205,7 +215,7 @@ def draw_gradient(surface, node, name, opacity):
         offset = max(offset, size(surface, child.get('offset'), 1))
         stop_color = surface.map_color(
             child.get('stop-color', 'black'),
-            float(child.get('stop-opacity', 1)) * opacity)
+            parse_opacity(child.get('stop-opacity')) * opacity)
         gradient_pattern.add_color_stop_rgba(offset, *stop_color)
 
     # Set spread method for gradient outside target bounds

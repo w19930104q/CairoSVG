@@ -210,10 +210,12 @@ def color(string, opacity=1):
 
     match = RGBA.search(string)
     if match:
-        r, g, b, a = tuple(
-            float(i.strip(' %')) / 100 if '%' in i else float(i) / 255
-            for i in match.group(1).strip().split(','))
-        return (r, g, b, a * 255 * opacity)
+        r, g, b, a = (i.strip() for i in match.group(1).strip().split(','))
+        r = float(r.strip('%')) / (100 if '%' in r else 255)
+        g = float(g.strip('%')) / (100 if '%' in g else 255)
+        b = float(b.strip('%')) / (100 if '%' in b else 255)
+        a = float(a.strip('%')) / (100 if '%' in a else 1)
+        return (r, g, b, a * opacity)
 
     match = RGB.search(string)
     if match:

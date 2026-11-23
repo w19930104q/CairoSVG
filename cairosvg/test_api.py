@@ -13,6 +13,8 @@ import pytest
 
 from . import SURFACES, VERSION, parser, surface, svg2pdf, svg2png
 from .__main__ import main
+from .colors import color
+from .defs import parse_opacity
 
 MAGIC_NUMBERS = {
     'SVG': b'<?xml',
@@ -26,6 +28,36 @@ SVG_SAMPLE = b'''\
 <svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="4in" height="5in">
   <rect x="5" y="10" width="13" height="15"
         fill="lime" stroke="black" stroke-width="1" />
+</svg>
+'''
+
+GRADIENT_OPACITY_SVG = b'''\
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="20"
+     viewBox="0 0 100 20">
+  <rect width="100" height="20" fill="white"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="red" stop-opacity="{left_opacity}"/>
+      <stop offset="1" stop-color="red" stop-opacity="{right_opacity}"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="20" fill="url(#g)"/>
+</svg>
+'''
+
+GRADIENT_RGBA_SVG = b'''\
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="20"
+     viewBox="0 0 100 20">
+  <rect width="100" height="20" fill="white"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="rgba(255,0,0,{left_alpha})"/>
+      <stop offset="1" stop-color="rgba(255,0,0,{right_alpha})"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="20" fill="url(#g)"/>
 </svg>
 '''
 
@@ -191,3 +223,86 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+def png_pixels(svg_bytestring, width, height):
+    """Render an SVG on white and return the RGB pixels of the middle row."""
+    png_bytestring = svg2png(
+        bytestring=svg_bytestring, output_width=width,
+        output_height=height, background_color='white')
+    image = cairo.ImageSurface.create_from_png(io.BytesIO(png_bytestring))
+    data = image.get_data()
+    stride = image.get_stride()
+    row = stride * (height // 2)
+    pixels = []
+    for x in range(width):
+        # Cairo ARGB32 stores B, G, R, A bytes in memory.
+        b, g, r, _ = data[row + x * 4:row + x * 4 + 4]
+        pixels.append((r, g, b))
+    return pixels
+
+
+def assert_pixel(pixel, expected, tolerance=2):
+    """Check that a pixel matches an expected RGB value within a tolerance."""
+    assert tuple(abs(value - target) for value, target in zip(
+        pixel, expected)) <= (tolerance, tolerance, tolerance)
+
+
+def test_gradient_stop_opacity():
+    """Stop opacity enters the gradient interpolation."""
+    pixels = png_pixels(
+        GRADIENT_OPACITY_SVG.replace(b'{left_opacity}', b'0').replace(
+            b'{right_opacity}', b'1'), 100, 20)
+    # The left end is transparent over the white background
+    assert_pixel(pixels[0], (255, 255, 255))
+    # The right end is opaque red
+    assert_pixel(pixels[-1], (255, 0, 0))
+    # Intermediate pixels blend red with white, with an increasing opacity
+    middle = pixels[len(pixels) // 2]
+    assert_pixel(middle, (255, 128, 128))
+    assert pixels[0] > middle > pixels[-1]
+
+
+def test_gradient_stop_opacity_percentage():
+    """Percentage values are accepted for ``stop-opacity``."""
+    pixels = png_pixels(
+        GRADIENT_OPACITY_SVG.replace(b'{left_opacity}', b'0%').replace(
+            b'{right_opacity}', b'100%'), 100, 20)
+    assert_pixel(pixels[0], (255, 255, 255))
+    assert_pixel(pixels[-1], (255, 0, 0))
+    middle = pixels[len(pixels) // 2]
+    assert_pixel(middle, (255, 128, 128))
+    assert pixels[0] > middle > pixels[-1]
+
+
+def test_gradient_rgba_alpha():
+    """Alpha of ``rgba()`` stop colors, numeric or percentage, is respected."""
+    numeric = png_pixels(
+        GRADIENT_RGBA_SVG.replace(b'{left_alpha}', b'0').replace(
+            b'{right_alpha}', b'0.5'), 100, 20)
+    percentage = png_pixels(
+        GRADIENT_RGBA_SVG.replace(b'{left_alpha}', b'0%').replace(
+            b'{right_alpha}', b'50%'), 100, 20)
+    for pixels in (numeric, percentage):
+        assert_pixel(pixels[0], (255, 255, 255))
+        # Half-transparent red over white gives RGB(255, 128, 128)
+        assert_pixel(pixels[-1], (255, 128, 128))
+
+
+def test_parse_opacity():
+    """The opacity parser accepts numbers and percentages."""
+    assert parse_opacity(None) == 1
+    assert parse_opacity('0') == 0
+    assert parse_opacity('0.7') == 0.7
+    assert parse_opacity('0%') == 0
+    assert parse_opacity('45%') == 0.45
+    assert parse_opacity('100%') == 1
+
+
+def test_rgba_color_alpha():
+    """``rgba()`` alpha values stay in the 0-1 range."""
+    assert color('rgba(255, 0, 0, 0.5)') == (1, 0, 0, 0.5)
+    assert color('rgba(255, 0, 0, 50%)') == (1, 0, 0, 0.5)
+    assert color('rgba(100%, 0%, 0%, 50%)') == (1, 0, 0, 0.5)
+    # The opacity argument still multiplies the alpha of the color
+    assert color('rgba(255, 0, 0, 0.5)', 0.5) == (1, 0, 0, 0.25)
