@@ -388,9 +388,10 @@ class Surface(object):
                     self.context.translate(x, y)
                     self.context.scale(width, height)
                 path.tag = 'g'
+                stroke_and_fill = self.stroke_and_fill
                 self.stroke_and_fill = False
                 self.draw(path)
-                self.stroke_and_fill = True
+                self.stroke_and_fill = stroke_and_fill
                 path.tag = 'clipPath'
                 self.context.restore()
                 # TODO: fill rules are not handled by cairo for clips
