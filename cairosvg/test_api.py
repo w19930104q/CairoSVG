@@ -96,6 +96,50 @@ def test_api(tmp_path):
         raise Exception('TypeError not raised')
 
 
+DASH_SVG = b'''\
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="40">
+  <line x1="10" y1="20" x2="210" y2="20" stroke="black"
+        stroke-width="10" __EXTRA__/>
+</svg>
+'''
+
+
+def _png_alpha_row(png):
+    """Return the alpha values of the middle row of a PNG byte string."""
+    surface = cairo.ImageSurface.create_from_png(io.BytesIO(png))
+    width, height = surface.get_width(), surface.get_height()
+    data = bytes(surface.get_data())
+    stride = surface.get_stride()
+    return [data[height // 2 * stride + x * 4 + 3]
+            for x in range(width)]
+
+
+def test_stroke_dasharray():
+    """Dashed strokes alternate ink and gaps; solid strokes stay continuous."""
+    # stroke-dasharray="10 10": ink on [0, 10), gap on [10, 20) along the
+    # line, which starts at x=10.
+    row = _png_alpha_row(svg2png(DASH_SVG.replace(
+        b'__EXTRA__', b'stroke-dasharray="10 10"')))
+    assert row[15] == 255  # 5px into the first dash: ink
+    assert row[25] == 0    # 5px into the following gap: no ink
+
+    # Without a dash array the whole line is inked.
+    row = _png_alpha_row(svg2png(DASH_SVG.replace(b'__EXTRA__', b'')))
+    assert row[15] == 255
+    assert row[25] == 255
+
+
+def test_stroke_dashoffset():
+    """stroke-dashoffset shifts the dash pattern along the path."""
+    # An offset of 10 (half of the 20px period) reverses the phase: what was
+    # a dash becomes a gap and vice versa.
+    row = _png_alpha_row(svg2png(DASH_SVG.replace(
+        b'__EXTRA__',
+        b'stroke-dasharray="10 10" stroke-dashoffset="10"')))
+    assert row[15] == 0
+    assert row[25] == 255
+
+
 def test_low_level_api():
     """Test the low-level Python API with various parameters."""
     expected_content = svg2png(SVG_SAMPLE)
