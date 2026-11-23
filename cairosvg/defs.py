@@ -221,7 +221,6 @@ def draw_pattern(surface, node, name, opacity):
     pattern_node = surface.patterns[name]
     pattern_node['opacity'] = float(pattern_node.get('opacity', 1)) * opacity
     pattern_node.tag = 'g'
-    transform(surface, pattern_node.get('patternTransform'))
 
     if pattern_node.get('viewBox'):
         if not (size(surface, pattern_node.get('width', 1), 1) and
@@ -237,6 +236,7 @@ def draw_pattern(surface, node, name, opacity):
         y = size(surface, pattern_node.get('y'), 'y')
         pattern_width = size(surface, pattern_node.get('width', 0), 1)
         pattern_height = size(surface, pattern_node.get('height', 0), 1)
+        bounding_box_matrix = None
     else:
         _, _, width, height = calculate_bounding_box(surface, node)
         x = size(surface, pattern_node.get('x'), 1) * width
@@ -245,6 +245,10 @@ def draw_pattern(surface, node, name, opacity):
             size(surface, pattern_node.pop('width', '1'), 1) * width)
         pattern_height = (
             size(surface, pattern_node.pop('height', '1'), 1) * height)
+        # The pattern transformation is applied in the objectBoundingBox
+        # coordinate system, keep the matrix converting these units to
+        # user units to apply the transformation in the right space
+        bounding_box_matrix = cairo.Matrix(width, 0, 0, height, 0, 0)
         if 'viewBox' not in pattern_node:
             pattern_node['width'] = pattern_width
             pattern_node['height'] = pattern_height
@@ -262,6 +266,22 @@ def draw_pattern(surface, node, name, opacity):
     pattern_pattern.set_matrix(cairo.Matrix(
         pattern_surface.width / pattern_width, 0, 0,
         pattern_surface.height / pattern_height, -x, -y))
+
+    # Apply the pattern transformation to the pattern matrix, without
+    # modifying the context of the surface using the pattern
+    if pattern_node.get('patternTransform'):
+        if bounding_box_matrix is not None:
+            bounding_box_matrix.invert()
+            pattern_pattern.set_matrix(
+                pattern_pattern.get_matrix().multiply(bounding_box_matrix))
+        transform(
+            surface, pattern_node.get('patternTransform'),
+            gradient=pattern_pattern)
+        if bounding_box_matrix is not None:
+            bounding_box_matrix.invert()
+            pattern_pattern.set_matrix(
+                pattern_pattern.get_matrix().multiply(bounding_box_matrix))
+
     surface.context.set_source(pattern_pattern)
     return True
 
