@@ -3,6 +3,15 @@
 ======
 
 
+Unreleased
+==========
+
+* Fix ``objectBoundingBox`` patterns reused to paint several nodes: the
+  pattern node is no longer permanently mutated by the first use, so
+  subsequent shapes keep the correct tile size instead of rendering an
+  empty (fully transparent) pattern
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

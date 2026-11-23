@@ -237,27 +237,63 @@ def draw_pattern(surface, node, name, opacity):
         y = size(surface, pattern_node.get('y'), 'y')
         pattern_width = size(surface, pattern_node.get('width', 0), 1)
         pattern_height = size(surface, pattern_node.get('height', 0), 1)
+        resize_node = False
     else:
-        _, _, width, height = calculate_bounding_box(surface, node)
+        bounding_box = calculate_bounding_box(surface, node)
+        if not is_non_empty_bounding_box(bounding_box):
+            return False
+        _, _, width, height = bounding_box
         x = size(surface, pattern_node.get('x'), 1) * width
         y = size(surface, pattern_node.get('y'), 1) * height
         pattern_width = (
-            size(surface, pattern_node.pop('width', '1'), 1) * width)
+            size(surface, pattern_node.get('width', '1'), 1) * width)
         pattern_height = (
-            size(surface, pattern_node.pop('height', '1'), 1) * height)
-        if 'viewBox' not in pattern_node:
-            pattern_node['width'] = pattern_width
-            pattern_node['height'] = pattern_height
-            if pattern_node.get('patternContentUnits') == 'objectBoundingBox':
-                pattern_node['transform'] = f'scale({width}, {height})'
+            size(surface, pattern_node.get('height', '1'), 1) * height)
 
     # Fail if pattern has an invalid size
     if pattern_width == 0.0 or pattern_height == 0.0:
         return False
 
-    from .surface import SVGSurface  # circular import
-    pattern_surface = SVGSurface(pattern_node, None, surface.dpi, surface)
-    pattern_pattern = cairo.SurfacePattern(pattern_surface.cairo)
+    # The pattern node is shared and may paint other nodes with other
+    # bounding boxes, so temporarily changed attributes are restored.
+    old_transform = None
+    if pattern_node.get('patternUnits') != 'userSpaceOnUse':
+        old_width = pattern_node.pop('width', None)
+        old_height = pattern_node.pop('height', None)
+        resize_node = 'viewBox' not in pattern_node
+        if resize_node:
+            # Give the pattern surface the tile size in user units so that
+            # its content is rendered at the same scale as the tiled pattern.
+            # With a viewBox, width and height are left unset so that the
+            # surface uses the viewBox to compute its own size.
+            pattern_node['width'] = pattern_width
+            pattern_node['height'] = pattern_height
+            if pattern_node.get('patternContentUnits') == 'objectBoundingBox':
+                old_transform = pattern_node.get('transform')
+                pattern_node['transform'] = f'scale({width}, {height})'
+
+    try:
+        from .surface import SVGSurface  # circular import
+        pattern_surface = SVGSurface(
+            pattern_node, None, surface.dpi, surface)
+        pattern_pattern = cairo.SurfacePattern(pattern_surface.cairo)
+    finally:
+        if pattern_node.get('patternUnits') != 'userSpaceOnUse':
+            if old_width is None:
+                pattern_node.pop('width', None)
+            else:
+                pattern_node['width'] = old_width
+            if old_height is None:
+                pattern_node.pop('height', None)
+            else:
+                pattern_node['height'] = old_height
+            if old_transform is not None:
+                pattern_node['transform'] = old_transform
+            elif (resize_node and
+                    pattern_node.get('patternContentUnits') ==
+                    'objectBoundingBox'):
+                del pattern_node['transform']
+
     pattern_pattern.set_extend(cairo.EXTEND_REPEAT)
     pattern_pattern.set_matrix(cairo.Matrix(
         pattern_surface.width / pattern_width, 0, 0,

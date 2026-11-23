@@ -191,3 +191,73 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+def _opaque_pixels(png, region=None):
+    """Count opaque pixels in the given region of a PNG byte string."""
+    image = cairo.ImageSurface.create_from_png(io.BytesIO(png))
+    width, height = image.get_width(), image.get_height()
+    x0, y0, x1, y1 = region or (0, 0, width, height)
+    data = bytes(image.get_data())
+    # Each pixel is a 4-byte BGRA little-endian value, alpha is the last byte
+    stride = image.get_stride()
+    return sum(
+        data[y * stride + x * 4 + 3]
+        for y in range(y0, y1) for x in range(x0, x1))
+
+
+def test_pattern_object_bounding_box_units():
+    """objectBoundingBox patterns scale the tile to the filled shape."""
+    # A 0.5-wide tile gives 2 periods per axis, i.e. 4 tiles on a square.
+    # The circle is defined in bounding-box units (r=0.1 of the 100px shape
+    # means a 10px radius), content is scaled together with the tile.
+    bbox_svg = b'''
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs>
+        <pattern id="p" patternUnits="objectBoundingBox"
+                 patternContentUnits="objectBoundingBox"
+                 width="0.5" height="0.5">
+          <circle cx="0.25" cy="0.25" r="0.1" fill="black"/>
+        </pattern>
+      </defs>
+      <rect width="100" height="100" fill="url(#p)"/>
+    </svg>'''
+    # Geometrically identical pattern expressed directly in user units
+    user_svg = b'''
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs>
+        <pattern id="p" patternUnits="userSpaceOnUse"
+                 width="50" height="50">
+          <circle cx="25" cy="25" r="10" fill="black"/>
+        </pattern>
+      </defs>
+      <rect width="100" height="100" fill="url(#p)"/>
+    </svg>'''
+    bbox_png = svg2png(bytestring=bbox_svg)
+    assert _opaque_pixels(bbox_png) > 1000
+    assert bbox_png == svg2png(bytestring=user_svg)
+    # PDF rendering works as well
+    assert svg2pdf(bytestring=bbox_svg).startswith(b'%PDF')
+
+
+def test_pattern_object_bounding_box_shared():
+    """A pattern reused by several shapes keeps correct per-shape scaling."""
+    svg = b'''
+    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="100">
+      <defs>
+        <pattern id="p" patternUnits="objectBoundingBox"
+                 patternContentUnits="objectBoundingBox"
+                 width="0.5" height="0.5">
+          <circle cx="0.25" cy="0.25" r="0.1" fill="black"/>
+        </pattern>
+      </defs>
+      <rect x="0" y="0" width="100" height="100" fill="url(#p)"/>
+      <rect x="120" y="0" width="100" height="100" fill="url(#p)"/>
+    </svg>'''
+    png = svg2png(bytestring=svg)
+    first = _opaque_pixels(png, (0, 0, 100, 100))
+    second = _opaque_pixels(png, (120, 0, 220, 100))
+    # Both rectangles must be painted: the pattern node is not mutated by
+    # the first use, so the second rectangle gets the same dotted pattern.
+    assert first > 1000
+    assert first == second
