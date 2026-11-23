@@ -3,6 +3,21 @@
 ======
 
 
+Future release
+==============
+
+* Follow the SVG specification for element ``opacity``: a translucent element
+  is now rendered as an isolated group, so its fill and stroke are composited
+  together before the opacity is applied once
+* Apply element ``opacity`` only once when a ``mask`` or a ``filter`` is set,
+  instead of multiplying it twice
+* Implement luminance masks: mask colors now define the masking alpha as
+  required by SVG, including semi-transparent mask content
+* Parse percentage values for ``opacity``, ``fill-opacity``,
+  ``stroke-opacity``, ``stop-opacity`` and ``flood-opacity``
+* Clamp opacity values outside the ``[0, 1]`` range
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

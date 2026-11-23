@@ -53,6 +53,27 @@ def paint(value):
     return (source, color)
 
 
+def opacity(value):
+    """Parse an SVG opacity value (number or percentage), clamped to [0, 1].
+
+    Numeric values (as stored by internal callers) are accepted as-is.
+
+    See https://www.w3.org/TR/SVG11/masking.html#ObjectAndGroupOpacityProperties
+
+    """
+    if value is None:
+        return 1
+    if isinstance(value, (int, float)):
+        alpha = float(value)
+    else:
+        value = value.strip()
+        if value.endswith('%'):
+            alpha = float(value[:-1]) / 100
+        else:
+            alpha = float(value)
+    return min(1, max(0, alpha))
+
+
 def node_format(surface, node, reference=True):
     """Return ``(width, height, viewbox)`` of ``node``.
 

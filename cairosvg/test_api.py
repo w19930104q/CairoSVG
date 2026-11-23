@@ -191,3 +191,110 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+def _center_gray(svg_source):
+    """Render an SVG and return the red channel of its center pixel."""
+    png = svg2png(bytestring=svg_source, scale=8)
+    surface = cairo.ImageSurface.create_from_png(io.BytesIO(png))
+    data = surface.get_data()
+    offset = (
+        surface.get_height() // 2 * surface.get_stride()
+        + surface.get_width() // 2 * 4)
+    return data[offset + 2][0]
+
+
+def test_opacity_element_and_group():
+    """Element and group opacity are applied once and match the spec."""
+    base = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<rect width="100" height="100" fill="white"/>')
+    element = (
+        base +
+        '<rect x="20" y="20" width="60" height="60" fill="black" '
+        'opacity="0.5"/></svg>')
+    group = (
+        base +
+        '<g opacity="0.5">'
+        '<rect x="20" y="20" width="60" height="60" fill="black"/></g></svg>')
+    # Black at 50% over white is a gray close to 128.
+    assert abs(_center_gray(element) - 128) <= 2
+    assert abs(_center_gray(group) - 128) <= 2
+    # Percentage opacity is parsed like the fractional value.
+    assert abs(_center_gray(element.replace('0.5', '50%')) - 128) <= 2
+
+
+def test_opacity_stacked_groups_and_nesting():
+    """Stacked and nested opacity combine by multiplication."""
+    two_groups = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<rect width="100" height="100" fill="white"/>'
+        '<g opacity="0.5">'
+        '<rect x="10" y="10" width="80" height="80" fill="black"/></g>'
+        '<g opacity="0.5">'
+        '<rect x="10" y="10" width="80" height="80" fill="black"/></g></svg>')
+    # Combined alpha 0.75: the center is darker than a single 0.5 group.
+    assert _center_gray(two_groups) < 120
+    nested = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<rect width="100" height="100" fill="white"/>'
+        '<g opacity="0.5"><rect x="20" y="20" width="60" height="60" '
+        'fill="black" opacity="0.5"/></g></svg>')
+    # 0.5 * 0.5 = 0.25 black coverage -> gray close to 191.
+    assert abs(_center_gray(nested) - 191) <= 2
+
+
+def test_opacity_unchanged_without_opacity():
+    """Rendering without opacity keeps solid colors."""
+    opaque = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<rect width="100" height="100" fill="white"/>'
+        '<rect x="20" y="20" width="60" height="60" fill="black"/></svg>')
+    assert _center_gray(opaque) == 0
+
+
+def test_opacity_luminance_mask():
+    """SVG masks use luminance and the element opacity is applied once."""
+    gray_mask = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<defs><mask id="m">'
+        '<rect width="100" height="100" fill="#808080"/></mask></defs>'
+        '<rect width="100" height="100" fill="white"/>'
+        '<rect x="20" y="20" width="60" height="60" fill="black" '
+        'mask="url(#m)"/></svg>')
+    # A 50% luminance mask behaves like opacity 0.5.
+    assert abs(_center_gray(gray_mask) - 128) <= 2
+
+    masked_opacity = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<defs><mask id="m">'
+        '<rect width="100" height="100" fill="white"/></mask></defs>'
+        '<rect width="100" height="100" fill="white"/>'
+        '<rect x="20" y="20" width="60" height="60" fill="black" '
+        'opacity="0.5" mask="url(#m)"/></svg>')
+    assert abs(_center_gray(masked_opacity) - 128) <= 2
+
+
+def test_opacity_pdf_semantics():
+    """PDF output exposes the alpha and a transparency group."""
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        b'<rect width="100" height="100" fill="white"/>'
+        b'<rect x="20" y="20" width="60" height="60" fill="black" '
+        b'opacity="0.5"/></svg>')
+    pdf = svg2pdf(bytestring=svg)
+    assert b'/CA 0.5' in pdf and b'/ca 0.5' in pdf
+    assert b'/S /Transparency' in pdf
+
+
+def test_opacity_helper():
+    """The helper parses numbers, percentages and clamps out-of-range values."""
+    from .helpers import opacity
+    assert opacity(None) == 1
+    assert opacity('0.5') == 0.5
+    assert opacity('50%') == 0.5
+    assert opacity('0') == 0
+    assert opacity('1') == 1
+    assert opacity('-0.5') == 0
+    assert opacity('2') == 1
+    assert opacity(0.25) == 0.25

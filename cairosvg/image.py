@@ -8,7 +8,7 @@ from io import BytesIO
 
 from PIL import Image, ImageOps
 
-from .helpers import node_format, preserve_ratio, size
+from .helpers import node_format, opacity, preserve_ratio, size
 from .parser import Tree
 from .surface import cairo
 from .url import parse_url
@@ -107,13 +107,13 @@ def image(surface, node):
         surface.context.clip()
 
     # Paint raster image
-    opacity = float(node.get('opacity', 1))
+    raster_opacity = opacity(node.get('opacity'))
     surface.context.save()
     surface.context.translate(x, y)
     surface.context.scale(scale_x, scale_y)
     surface.context.translate(translate_x, translate_y)
     surface.context.set_source(image_surface.pattern)
-    surface.context.paint_with_alpha(opacity)
+    surface.context.paint_with_alpha(raster_opacity)
     surface.context.restore()
 
 

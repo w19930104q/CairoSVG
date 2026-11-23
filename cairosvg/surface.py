@@ -14,7 +14,7 @@ from .defs import (
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
 from .helpers import (
-    UNITS, PointError, clip_rect, node_format, normalize, paint,
+    UNITS, PointError, clip_rect, node_format, normalize, opacity, paint,
     preserve_ratio, size, transform)
 from .image import image, invert_image
 from .parser import Tree
@@ -322,12 +322,12 @@ class Surface(object):
         # Find and prepare opacity, masks and filters
         mask = parse_url(node.get('mask')).fragment
         filter_ = parse_url(node.get('filter')).fragment
-        opacity = float(node.get('opacity', 1))
+        node_opacity = opacity(node.get('opacity'))
 
         if filter_:
             prepare_filter(self, node, filter_)
 
-        if filter_ or mask or (opacity < 1 and node.children):
+        if filter_ or mask or node_opacity < 1:
             self.context.push_group()
 
         # Move to (node.x, node.y)
@@ -411,12 +411,10 @@ class Surface(object):
                 # Error in point parsing, do nothing
                 pass
 
-        # Get stroke and fill opacity
-        stroke_opacity = float(node.get('stroke-opacity', 1))
-        fill_opacity = float(node.get('fill-opacity', 1))
-        if opacity < 1 and not node.children:
-            stroke_opacity *= opacity
-            fill_opacity *= opacity
+        # Get stroke and fill opacity. The node ``opacity`` is applied once
+        # when the isolated group (pushed above when opacity < 1) is painted.
+        stroke_opacity = opacity(node.get('stroke-opacity'))
+        fill_opacity = opacity(node.get('fill-opacity'))
 
         # Manage display and visibility
         display = node.get('display', 'inline') != 'none'
@@ -477,14 +475,14 @@ class Surface(object):
                 self.draw(child)
 
         # Apply filter, mask and opacity
-        if filter_ or mask or (opacity < 1 and node.children):
+        if filter_ or mask or node_opacity < 1:
             self.context.pop_group_to_source()
             if filter_:
                 apply_filter_before_painting(self, node, filter_)
             if mask in self.masks:
-                paint_mask(self, node, mask, opacity)
+                paint_mask(self, node, mask, node_opacity)
             else:
-                self.context.paint_with_alpha(opacity)
+                self.context.paint_with_alpha(node_opacity)
             if filter_:
                 apply_filter_after_painting(self, node, filter_)
 

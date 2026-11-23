@@ -7,7 +7,7 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
-from .helpers import paint, size, transform
+from .helpers import opacity, paint, size, transform
 from .parser import Tree
 from .shapes import rect
 from .surface import cairo
@@ -116,11 +116,13 @@ def clip_path(surface, node):
         surface.paths[node['id']] = node
 
 
-def paint_mask(surface, node, name, opacity):
+def paint_mask(surface, node, name, node_opacity):
     """Paint the mask of the current surface."""
     mask_node = surface.masks[name]
     mask_node.tag = 'g'
-    mask_node['opacity'] = opacity
+    # Render the mask content without the masked element's opacity: it is
+    # applied once below when the luminance is encoded into the mask alpha.
+    mask_node['opacity'] = 1
 
     if mask_node.get('maskUnits') == 'userSpaceOnUse':
         width_ref, height_ref = 'x', 'y'
@@ -146,16 +148,62 @@ def paint_mask(surface, node, name, opacity):
 
     from .surface import SVGSurface  # circular import
     mask_surface = SVGSurface(mask_node, None, surface.dpi, surface)
+    mask_surface.cairo.flush()
+
+    # SVG masks are luminance masks: the masking alpha is computed from the
+    # luminance of the mask content, multiplied by its own alpha (see
+    # https://www.w3.org/TR/SVG11/masking.html#Masking). Cairo's
+    # ``mask_surface`` only considers the alpha channel, so rasterize the
+    # vector mask and encode the luminance into the alpha channel.
+    mask_width = max(1, int(round(mask_surface.width)))
+    mask_height = max(1, int(round(mask_surface.height)))
+    raster_mask = cairo.ImageSurface(
+        cairo.FORMAT_ARGB32, mask_width, mask_height)
+    mask_context = cairo.Context(raster_mask)
+    mask_context.scale(
+        mask_width / mask_surface.width,
+        mask_height / mask_surface.height)
+    mask_context.set_source_surface(mask_surface.cairo)
+    mask_context.paint()
+    raster_mask.flush()
+
+    pixels = memoryview(raster_mask.get_data())
+    stride = raster_mask.get_stride()
+    for pixel_y in range(mask_height):
+        offset = pixel_y * stride
+        row_end = offset + mask_width * 4
+        while offset < row_end:
+            blue, green, red, alpha = (
+                pixels[offset], pixels[offset + 1],
+                pixels[offset + 2], pixels[offset + 3])
+            if alpha:
+                # Cairo stores ARGB32 as premultiplied alpha: undo it to
+                # recover the actual color before computing the luminance.
+                inverse_alpha = 255 / alpha
+                luminance = (
+                    0.2126 * red * inverse_alpha
+                    + 0.7152 * green * inverse_alpha
+                    + 0.0722 * blue * inverse_alpha)
+                mask_alpha = min(
+                    255, int(round(
+                        luminance * alpha / 255 * node_opacity)))
+            else:
+                mask_alpha = 0
+            pixels[offset:offset + 4] = bytes((
+                mask_alpha, mask_alpha, mask_alpha, mask_alpha))
+            offset += 4
+    raster_mask.mark_dirty()
+
     surface.context.save()
     surface.context.translate(x, y)
     surface.context.scale(
-        mask_node['width'] / mask_surface.width,
-        mask_node['height'] / mask_surface.height)
-    surface.context.mask_surface(mask_surface.cairo)
+        mask_node['width'] / mask_width,
+        mask_node['height'] / mask_height)
+    surface.context.mask_surface(raster_mask)
     surface.context.restore()
 
 
-def draw_gradient(surface, node, name, opacity):
+def draw_gradient(surface, node, name, opacity_):
     """Gradients colors."""
     gradient_node = surface.gradients[name]
 
@@ -205,7 +253,7 @@ def draw_gradient(surface, node, name, opacity):
         offset = max(offset, size(surface, child.get('offset'), 1))
         stop_color = surface.map_color(
             child.get('stop-color', 'black'),
-            float(child.get('stop-opacity', 1)) * opacity)
+            opacity(child.get('stop-opacity')) * opacity_)
         gradient_pattern.add_color_stop_rgba(offset, *stop_color)
 
     # Set spread method for gradient outside target bounds
@@ -216,10 +264,10 @@ def draw_gradient(surface, node, name, opacity):
     return True
 
 
-def draw_pattern(surface, node, name, opacity):
+def draw_pattern(surface, node, name, opacity_):
     """Draw a pattern image."""
     pattern_node = surface.patterns[name]
-    pattern_node['opacity'] = float(pattern_node.get('opacity', 1)) * opacity
+    pattern_node['opacity'] = opacity(pattern_node.get('opacity')) * opacity_
     pattern_node.tag = 'g'
     transform(surface, pattern_node.get('patternTransform'))
 
@@ -327,7 +375,7 @@ def apply_filter_after_painting(surface, node, name):
                 rect(surface, dict(x=x, y=y, width=width, height=height))
                 surface.context.set_source_rgba(*surface.map_color(
                     paint(child.get('flood-color'))[1],
-                    float(child.get('flood-opacity', 1))))
+                    opacity(child.get('flood-opacity'))))
                 surface.context.fill()
                 surface.context.restore()
 
